@@ -4,6 +4,7 @@
   "description": "",
   "main": "index.js",
   "scripts": {
+    "dev": "node --env-file=.env --import=tsx src/index.ts",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "keywords": [],
@@ -13,12 +14,14 @@
   "dependencies": {
     "@circle-fin/developer-controlled-wallets": "^10.3.0",
     "dotenv": "^17.4.2",
+    "express": "^5.2.1",
     "node-fetch": "^3.3.2",
     "tsx": "^4.21.0",
     "typescript": "^6.0.3",
     "uuid": "^14.0.0"
   },
   "devDependencies": {
+    "@types/express": "^5.0.6",
     "@types/node": "^25.6.0"
   }
 }
