@@ -32,6 +32,10 @@ PO-facing; no secrets, keys, or `.env` contents appear in any of them.
    — campaign-pool extension (in-memory pool, click micropayments, pool
    deduction in `/api/payouts`, demo UI); architect-facing review of
    seams, invariants, and open decisions.
+8. [`08-dev-server-multiplicity-bug.md`](./08-dev-server-multiplicity-bug.md)
+   — pool-refresh bug report traced to two concurrent `next dev`
+   processes holding independent in-memory pools; resolved
+   operationally, no code change; hardening options open.
 
 ## Convention
 
