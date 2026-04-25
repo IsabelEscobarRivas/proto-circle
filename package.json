@@ -1,24 +1,34 @@
 {
   "name": "proto-circle",
-  "version": "1.0.0",
-  "description": "",
-  "main": "index.js",
-  "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
-  },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
+  "version": "0.1.0",
+  "description": "Hackathon prototype: instant attribution + USDC micropayments for creator-driven traffic on Arc Testnet.",
+  "private": true,
   "type": "module",
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "setup": "node --env-file=.env --import=tsx scripts/create-wallet.ts",
+    "fetch-wallets": "node --env-file=.env --import=tsx scripts/fetch-wallets.ts",
+    "provision-creator-wallet": "node --env-file=.env --import=tsx scripts/provision-creator-wallet.ts",
+    "test-live-payout": "node --env-file=.env --import=tsx scripts/test-live-payout.ts",
+    "lint": "next lint"
+  },
   "dependencies": {
     "@circle-fin/developer-controlled-wallets": "^10.3.0",
+    "better-sqlite3": "^11.7.0",
     "dotenv": "^17.4.2",
-    "node-fetch": "^3.3.2",
-    "tsx": "^4.21.0",
-    "typescript": "^6.0.3",
-    "uuid": "^14.0.0"
+    "nanoid": "^5.0.9",
+    "next": "^15.1.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "tsx": "^4.21.0"
   },
   "devDependencies": {
-    "@types/node": "^25.6.0"
+    "@types/better-sqlite3": "^7.6.12",
+    "@types/node": "^22.10.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "typescript": "^5.7.2"
   }
 }
