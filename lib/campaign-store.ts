@@ -32,7 +32,7 @@ function init(): CampaignState {
         walletAddress: "0x704d61937c67e39a0d53f4a014066f373a1b0241",
       },
     ],
-    clickPayoutAmount: 0.01,
+    clickPayoutAmount: 0.005,
     conversionPayoutAmount: 0.2,
   };
 }
