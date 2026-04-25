@@ -186,6 +186,29 @@ async function getJson<T>(path: string): Promise<T> {
   return (await res.json()) as T;
 }
 
+const FAUCET_URL = "https://faucet.circle.com";
+const FAUCET_WINDOW_NAME = "ProtoCircleFaucet";
+
+/** Opens Circle in a named popup: campaign page stays in this tab; repeat clicks reuse the same window. */
+function openCircleFaucetPopup(): void {
+  if (typeof window === "undefined") return;
+  const w = 720;
+  const h = 800;
+  const left = window.screenX + Math.min(80, window.innerWidth - w - 20);
+  const top = window.screenY + 40;
+  const features = `popup=yes,width=${w},height=${h},left=${left},top=${top},scrollbars=yes,resizable=yes,noreferrer`;
+  const win = window.open(FAUCET_URL, FAUCET_WINDOW_NAME, features);
+  if (win) {
+    try {
+      win.focus();
+    } catch {
+      // ignore
+    }
+  } else {
+    window.open(FAUCET_URL, FAUCET_WINDOW_NAME, "noopener,noreferrer");
+  }
+}
+
 function DemoPageContent() {
   const searchParams = useSearchParams();
   /** Stable default for SSR + first client paint — then sync from URL in useEffect to avoid hydration mismatch. */
@@ -207,6 +230,9 @@ function DemoPageContent() {
 
   /** On-chain USDC (platform wallet) for idle/post-fund display; in-memory pool after sim starts. */
   const [onChainUsdc, setOnChainUsdc] = useState<string | null>(null);
+  const [platformWalletAddress, setPlatformWalletAddress] = useState<
+    string | null
+  >(null);
   const [poolBalanceFlash, setPoolBalanceFlash] = useState(false);
   const fundPollIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const fundPollTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -248,8 +274,14 @@ function DemoPageContent() {
     void (async () => {
       try {
         const res = await fetch("/api/campaigns/demo/balance");
-        const j = (await res.json()) as { balance?: string };
-        if (!c) setOnChainUsdc(j.balance ?? "0");
+        const j = (await res.json()) as {
+          balance?: string;
+          walletAddress?: string;
+        };
+        if (!c) {
+          setOnChainUsdc(j.balance ?? "0");
+          if (j.walletAddress) setPlatformWalletAddress(j.walletAddress);
+        }
       } catch {
         if (!c) setOnChainUsdc("0");
       }
@@ -482,8 +514,12 @@ function DemoPageContent() {
       void (async () => {
         try {
           const res = await fetch("/api/campaigns/demo/balance");
-          const j = (await res.json()) as { balance?: string };
+          const j = (await res.json()) as {
+            balance?: string;
+            walletAddress?: string;
+          };
           const v = parseFloat(j.balance ?? "0");
+          if (j.walletAddress) setPlatformWalletAddress(j.walletAddress);
           if (Number.isFinite(v) && v > fundPollBaselineRef.current) {
             fundPollBaselineRef.current = v;
             setOnChainUsdc(j.balance ?? String(v));
@@ -684,8 +720,12 @@ function DemoPageContent() {
     await refreshPool();
     try {
       const res = await fetch("/api/campaigns/demo/balance");
-      const j = (await res.json()) as { balance?: string };
+      const j = (await res.json()) as {
+        balance?: string;
+        walletAddress?: string;
+      };
       setOnChainUsdc(j.balance ?? "0");
+      if (j.walletAddress) setPlatformWalletAddress(j.walletAddress);
     } catch {
       // ignore
     }
@@ -1311,16 +1351,17 @@ function DemoPageContent() {
                   maxWidth: 720,
                 }}
               >
-                <a
+                <button
+                  type="button"
                   className="idleFundBtn"
-                  href="https://faucet.circle.com"
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  onClick={onFundCampaignClick}
+                  onClick={() => {
+                    onFundCampaignClick();
+                    openCircleFaucetPopup();
+                  }}
                 >
                   <span aria-hidden>👛</span>
                   Fund Your Campaign
-                </a>
+                </button>
                 <button
                   type="button"
                   className="idleKickBtn"
@@ -1340,7 +1381,10 @@ function DemoPageContent() {
                   lineHeight: 1.45,
                 }}
               >
-                Fund your wallet first, then kick off the live simulation.
+                Fund your wallet first, then kick off the live simulation. (You
+                can always add more USDC from the{" "}
+                <strong style={{ color: C.text }}>Campaign pool</strong> card
+                below — same Circle Faucet link and wallet address.)
               </p>
             </section>
           ) : null}
@@ -1352,6 +1396,7 @@ function DemoPageContent() {
             displayPoolDollars={displayPoolDollars}
             isOnChainDisplay={showOnChainPoolDisplay}
             poolBalanceFlash={poolBalanceFlash}
+            platformWalletAddress={platformWalletAddress}
           />
           <LiveEventsCard
             rows={eventRows}
@@ -1533,7 +1578,13 @@ function DemoNavBar() {
         <a href="https://testnet.arcscan.app" target="_blank" rel="noreferrer">
           Arcscan
         </a>
-        <a href="https://faucet.circle.com" target="_blank" rel="noreferrer">
+        <a
+          href={FAUCET_URL}
+          onClick={(e) => {
+            e.preventDefault();
+            openCircleFaucetPopup();
+          }}
+        >
           Faucet
         </a>
       </nav>
@@ -1684,6 +1735,151 @@ function CausalStepStrip({ states }: { states: StepState[] }) {
   );
 }
 
+function FaucetFundingStrip({
+  platformWalletAddress,
+  onRefresh,
+}: {
+  platformWalletAddress: string | null;
+  onRefresh: () => void;
+}) {
+  const [copied, setCopied] = useState(false);
+
+  const copyAddress = useCallback(async () => {
+    if (!platformWalletAddress) return;
+    try {
+      await navigator.clipboard.writeText(platformWalletAddress);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 2000);
+    } catch {
+      // ignore
+    }
+  }, [platformWalletAddress]);
+
+  return (
+    <div
+      style={{
+        marginTop: 12,
+        padding: "12px 14px",
+        borderRadius: 10,
+        border: `1px solid ${C.border}`,
+        background: "#f0f9ff",
+        maxWidth: 640,
+      }}
+    >
+      <p
+        style={{
+          margin: "0 0 10px",
+          fontSize: 13,
+          fontWeight: 600,
+          color: C.text,
+          lineHeight: 1.4,
+        }}
+      >
+        Add test USDC — you stay on this page
+      </p>
+      <p
+        style={{
+          margin: "0 0 12px",
+          fontSize: 12,
+          lineHeight: 1.55,
+          color: C.textMuted,
+        }}
+      >
+        The Circle Faucet opens in a <strong style={{ color: C.text }}>separate window</strong> next to
+        this one (or reuses the same window if you click again). In the faucet, choose{" "}
+        <strong style={{ color: C.text }}>Arc Testnet</strong>, then paste the payout address below
+        and send USDC. When you’re done, close the faucet or leave it open — then press{" "}
+        <strong style={{ color: C.text }}>Refresh pool</strong> at the right.
+      </p>
+      {platformWalletAddress ? (
+        <code
+          title={platformWalletAddress}
+          style={{
+            display: "block",
+            marginBottom: 10,
+            background: C.stepInactiveBg,
+            color: C.text,
+            padding: "8px 10px",
+            borderRadius: 6,
+            fontSize: 11,
+            wordBreak: "break-all",
+            lineHeight: 1.4,
+          }}
+        >
+          {platformWalletAddress}
+        </code>
+      ) : (
+        <p style={{ fontSize: 12, color: C.textMuted, margin: "0 0 10px" }}>
+          Platform address will show here after a balance fetch, or set{" "}
+          <code style={{ fontSize: 11 }}>CIRCLE_WALLET_ADDRESS</code> in <code style={{ fontSize: 11 }}>.env</code>.
+        </p>
+      )}
+      <div
+        style={{
+          display: "flex",
+          flexWrap: "wrap",
+          gap: 8,
+          alignItems: "center",
+        }}
+      >
+        <button
+          type="button"
+          onClick={openCircleFaucetPopup}
+          style={{
+            fontSize: 13,
+            fontWeight: 600,
+            background: C.blue,
+            color: "#fff",
+            border: "none",
+            borderRadius: 8,
+            padding: "9px 14px",
+            cursor: "pointer",
+            fontFamily: "inherit",
+          }}
+        >
+          Open Circle Faucet
+        </button>
+        <button
+          type="button"
+          onClick={() => void copyAddress()}
+          disabled={!platformWalletAddress}
+          style={{
+            fontSize: 13,
+            fontWeight: 600,
+            background: "#fff",
+            color: C.text,
+            border: `1px solid ${C.border}`,
+            borderRadius: 8,
+            padding: "9px 14px",
+            cursor: platformWalletAddress ? "pointer" : "not-allowed",
+            fontFamily: "inherit",
+            opacity: platformWalletAddress ? 1 : 0.5,
+          }}
+        >
+          {copied ? "Copied" : "Copy payout address"}
+        </button>
+        <button
+          type="button"
+          onClick={onRefresh}
+          style={{
+            fontSize: 13,
+            fontWeight: 600,
+            background: C.green,
+            color: "#fff",
+            border: "none",
+            borderRadius: 8,
+            padding: "9px 14px",
+            cursor: "pointer",
+            fontFamily: "inherit",
+          }}
+        >
+          Refresh pool
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function CampaignPoolCard({
   pool,
   campaignName,
@@ -1691,6 +1887,7 @@ function CampaignPoolCard({
   displayPoolDollars,
   isOnChainDisplay,
   poolBalanceFlash,
+  platformWalletAddress,
 }: {
   pool: Campaign | null;
   campaignName: string;
@@ -1698,6 +1895,7 @@ function CampaignPoolCard({
   displayPoolDollars: number | null;
   isOnChainDisplay: boolean;
   poolBalanceFlash: boolean;
+  platformWalletAddress: string | null;
 }) {
   const balanceLine =
     displayPoolDollars !== null && Number.isFinite(displayPoolDollars)
@@ -1755,6 +1953,10 @@ function CampaignPoolCard({
           LIVE
         </span>
       </h2>
+      <FaucetFundingStrip
+        platformWalletAddress={platformWalletAddress}
+        onRefresh={onRefresh}
+      />
       <div
         style={{
           display: "flex",

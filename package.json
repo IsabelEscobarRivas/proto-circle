@@ -4,6 +4,9 @@
   "description": "Hackathon prototype: instant attribution + USDC micropayments for creator-driven traffic on Arc Testnet.",
   "private": true,
   "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
   "scripts": {
     "predev": "lsof -ti:3001 | xargs -I{} kill -9 {} 2>/dev/null || true",
     "dev": "next dev",

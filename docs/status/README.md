@@ -44,4 +44,4 @@ PO-facing; no secrets, keys, or `.env` contents appear in any of them.
 - Cross-references use relative markdown links (e.g. `[text](./05-...)`)
   so they render correctly on GitHub and in local preview.
 - New briefings should continue the numeric sequence
-  (next would be `07-...`).
+  (next would be `09-...`).

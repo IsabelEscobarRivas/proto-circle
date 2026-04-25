@@ -8,13 +8,21 @@ export async function GET() {
     const walletId = process.env.CIRCLE_WALLET_ID;
     if (!apiKey || !entitySecret) {
       return NextResponse.json(
-        { balance: "0", error: "CIRCLE_API_KEY or CIRCLE_ENTITY_SECRET missing" },
+        {
+          balance: "0",
+          walletAddress: process.env.CIRCLE_WALLET_ADDRESS?.trim() || undefined,
+          error: "CIRCLE_API_KEY or CIRCLE_ENTITY_SECRET missing",
+        },
         { status: 200 },
       );
     }
     if (!walletId) {
       return NextResponse.json(
-        { balance: "0", error: "CIRCLE_WALLET_ID not set" },
+        {
+          balance: "0",
+          walletAddress: process.env.CIRCLE_WALLET_ADDRESS?.trim() || undefined,
+          error: "CIRCLE_WALLET_ID not set",
+        },
         { status: 200 },
       );
     }
@@ -33,10 +41,15 @@ export async function GET() {
 
     const amount = usdc?.amount ?? "0";
 
-    return NextResponse.json({ balance: amount });
+    const walletAddress = process.env.CIRCLE_WALLET_ADDRESS?.trim() || undefined;
+    return NextResponse.json({ balance: amount, walletAddress });
   } catch (e) {
     return NextResponse.json(
-      { balance: "0", error: (e as Error).message },
+      {
+        balance: "0",
+        walletAddress: process.env.CIRCLE_WALLET_ADDRESS?.trim() || undefined,
+        error: (e as Error).message,
+      },
       { status: 200 },
     );
   }
