@@ -2,6 +2,9 @@ import { NextResponse } from "next/server";
 import { initiateDeveloperControlledWalletsClient } from "@circle-fin/developer-controlled-wallets";
 
 export async function GET() {
+  console.log("CIRCLE_API_KEY present:", !!process.env.CIRCLE_API_KEY);
+  console.log("CIRCLE_ENTITY_SECRET present:", !!process.env.CIRCLE_ENTITY_SECRET);
+  console.log("CIRCLE_WALLET_ID present:", !!process.env.CIRCLE_WALLET_ID);
   try {
     const apiKey = process.env.CIRCLE_API_KEY;
     const entitySecret = process.env.CIRCLE_ENTITY_SECRET;
