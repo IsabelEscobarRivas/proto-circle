@@ -21,7 +21,7 @@ function init(): CampaignState {
   // micropayments succeed after a cold start without /approve (restart-safe).
   return {
     id: "demo-campaign-001",
-    poolBalance: 10.0,
+    poolBalance: 0,
     approvedCreators: [
       {
         id: "creator-a",
@@ -43,6 +43,10 @@ if (!g[GLOBAL_KEY]) {
 }
 
 export const campaign: CampaignState = g[GLOBAL_KEY]!;
+
+export function setPoolBalance(amount: number) {
+  campaign.poolBalance = amount;
+}
 
 export function deductFromPool(amount: number): boolean {
   if (campaign.poolBalance < amount) return false;

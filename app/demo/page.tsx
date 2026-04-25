@@ -5,6 +5,7 @@ import {
   useCallback,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type CSSProperties,
   type ReactNode,
@@ -187,7 +188,8 @@ async function getJson<T>(path: string): Promise<T> {
 
 function DemoPageContent() {
   const searchParams = useSearchParams();
-  const campaignName = searchParams.get("campaign") ?? "Demo Campaign";
+  /** Stable default for SSR + first client paint — then sync from URL in useEffect to avoid hydration mismatch. */
+  const [campaignName, setCampaignName] = useState("Demo Campaign");
   const [phase, setPhase] = useState<Phase>("idle");
   const [error, setError] = useState<string | null>(null);
   const [, setTrace] = useState<string[]>([]);
@@ -202,6 +204,20 @@ function DemoPageContent() {
   const [clickMicropayments, setClickMicropayments] = useState<
     ClickMicropayment[]
   >([]);
+
+  /** On-chain USDC (platform wallet) for idle/post-fund display; in-memory pool after sim starts. */
+  const [onChainUsdc, setOnChainUsdc] = useState<string | null>(null);
+  const [poolBalanceFlash, setPoolBalanceFlash] = useState(false);
+  const fundPollIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const fundPollTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const fundPollBaselineRef = useRef(0);
+
+  const [sparcMessages, setSparcMessages] = useState<
+    { role: string; content: string }[]
+  >([]);
+  const [sparcInput, setSparcInput] = useState("");
+  const [sparcLoading, setSparcLoading] = useState(false);
+  const [briefApproved, setBriefApproved] = useState(false);
 
   const log = useCallback((msg: string) => {
     setTrace((t) => [...t, `${nowStamp()}  ${msg}`]);
@@ -218,10 +234,30 @@ function DemoPageContent() {
     }
   }, [log]);
 
+  useEffect(() => {
+    setCampaignName(searchParams.get("campaign") ?? "Demo Campaign");
+  }, [searchParams]);
+
   // Initial pool fetch on mount.
   useEffect(() => {
     void refreshPool();
   }, [refreshPool]);
+
+  useEffect(() => {
+    let c = false;
+    void (async () => {
+      try {
+        const res = await fetch("/api/campaigns/demo/balance");
+        const j = (await res.json()) as { balance?: string };
+        if (!c) setOnChainUsdc(j.balance ?? "0");
+      } catch {
+        if (!c) setOnChainUsdc("0");
+      }
+    })();
+    return () => {
+      c = true;
+    };
+  }, []);
 
   // Theme: hide global dark topbar; paint body to match light shell (no API / logic)
   useEffect(() => {
@@ -424,9 +460,67 @@ function DemoPageContent() {
     }
   }, [log, preflightOk, refreshPool]);
 
-  const activateCampaign = useCallback(() => {
-    void seed();
-  }, [seed]);
+  const stopFundingPoll = useCallback(() => {
+    if (fundPollIntervalRef.current) {
+      clearInterval(fundPollIntervalRef.current);
+      fundPollIntervalRef.current = null;
+    }
+    if (fundPollTimeoutRef.current) {
+      clearTimeout(fundPollTimeoutRef.current);
+      fundPollTimeoutRef.current = null;
+    }
+  }, []);
+
+  useEffect(() => () => stopFundingPoll(), [stopFundingPoll]);
+
+  const onFundCampaignClick = useCallback(() => {
+    const baseline = parseFloat(onChainUsdc ?? "0");
+    fundPollBaselineRef.current = Number.isFinite(baseline) ? baseline : 0;
+    stopFundingPoll();
+
+    const checkBalance = () => {
+      void (async () => {
+        try {
+          const res = await fetch("/api/campaigns/demo/balance");
+          const j = (await res.json()) as { balance?: string };
+          const v = parseFloat(j.balance ?? "0");
+          if (Number.isFinite(v) && v > fundPollBaselineRef.current) {
+            fundPollBaselineRef.current = v;
+            setOnChainUsdc(j.balance ?? String(v));
+            setPoolBalanceFlash(true);
+            window.setTimeout(() => setPoolBalanceFlash(false), 1200);
+          }
+        } catch {
+          // ignore
+        }
+      })();
+    };
+
+    checkBalance();
+    fundPollIntervalRef.current = setInterval(checkBalance, 5000);
+    fundPollTimeoutRef.current = setTimeout(() => {
+      stopFundingPoll();
+    }, 60_000);
+  }, [onChainUsdc, stopFundingPoll]);
+
+  const activateCampaign = useCallback(async () => {
+    stopFundingPoll();
+    try {
+      const raw =
+        onChainUsdc != null && onChainUsdc !== ""
+          ? parseFloat(onChainUsdc)
+          : 0;
+      const balance = Number.isFinite(raw) ? raw : 0;
+      await postJson<{ poolBalance: number }>("/api/campaigns/demo/reset", {
+        balance,
+      });
+      void seed();
+    } catch (e) {
+      const m = e instanceof Error ? e.message : String(e);
+      setError(m);
+      log(`POST /api/campaigns/demo/reset failed: ${m}`);
+    }
+  }, [seed, stopFundingPoll, onChainUsdc, log]);
 
   const resolveAndPay = useCallback(async () => {
     if (!subjectId) return;
@@ -570,8 +664,165 @@ function DemoPageContent() {
   const allComplete =
     payouts.length > 0 && payouts.every((p) => p.status === "complete");
 
-  const showIdleActivation =
+  const idlePreSim =
     (phase === "idle" || phase === "error") && eventRows.length === 0;
+  const showPreSimCTAs = idlePreSim && briefApproved;
+
+  const showOnChainPoolDisplay = idlePreSim;
+
+  const displayPoolDollars: number | null = useMemo(() => {
+    if (showOnChainPoolDisplay) {
+      if (onChainUsdc === null) return null;
+      const n = parseFloat(onChainUsdc);
+      return Number.isFinite(n) ? n : null;
+    }
+    if (pool) return pool.poolBalance;
+    return null;
+  }, [showOnChainPoolDisplay, onChainUsdc, pool]);
+
+  const refreshPoolAndBalance = useCallback(async () => {
+    await refreshPool();
+    try {
+      const res = await fetch("/api/campaigns/demo/balance");
+      const j = (await res.json()) as { balance?: string };
+      setOnChainUsdc(j.balance ?? "0");
+    } catch {
+      // ignore
+    }
+  }, [refreshPool]);
+
+  const sparcBudgetStr = useMemo(() => {
+    if (onChainUsdc != null && onChainUsdc !== "") {
+      const n = parseFloat(onChainUsdc);
+      if (Number.isFinite(n)) return `~$${n.toFixed(2)} USDC (on-chain pool)`;
+    }
+    return "See campaign pool (on-chain)";
+  }, [onChainUsdc]);
+
+  const sparcPayoutTerms = useMemo(
+    () =>
+      pool
+        ? `$${pool.clickPayoutAmount.toFixed(2)}/click · $${pool.conversionPayoutAmount.toFixed(2)} conversion`
+        : "$0.01/click · $0.20 conversion",
+    [pool],
+  );
+
+  useEffect(() => {
+    setSparcMessages([]);
+    setSparcInput("");
+    setBriefApproved(false);
+  }, [campaignName]);
+
+  const lastSpArcAssistant = useMemo(() => {
+    const rev = [...sparcMessages].reverse();
+    const a = rev.find((m) => m.role === "assistant");
+    return a?.content ?? "";
+  }, [sparcMessages]);
+
+  /** Display only — last user + last assistant; full `sparcMessages` still sent to API. */
+  const lastSparcUserBubble = useMemo(() => {
+    for (let i = sparcMessages.length - 1; i >= 0; i--) {
+      if (sparcMessages[i]!.role === "user") return sparcMessages[i]!;
+    }
+    return null;
+  }, [sparcMessages]);
+
+  const lastSparcAssistantBubble = useMemo(() => {
+    for (let i = sparcMessages.length - 1; i >= 0; i--) {
+      if (sparcMessages[i]!.role === "assistant")
+        return sparcMessages[i]!;
+    }
+    return null;
+  }, [sparcMessages]);
+
+  const hasAssistantReply = useMemo(
+    () => sparcMessages.some((m) => m.role === "assistant"),
+    [sparcMessages],
+  );
+
+  const startSpArc = useCallback(async () => {
+    const opening = {
+      role: "user",
+      content: "Generate the creator brief for this campaign.",
+    };
+    const newMessages = [opening];
+    setSparcMessages(newMessages);
+    setSparcLoading(true);
+    try {
+      const res = await fetch("/api/campaigns/demo/sparc", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          campaignName,
+          budget: sparcBudgetStr,
+          payoutTerms: sparcPayoutTerms,
+          messages: newMessages,
+        }),
+      });
+      const data = (await res.json()) as { reply?: string };
+      const reply =
+        typeof data.reply === "string" && data.reply
+          ? data.reply
+          : "SpArc could not generate a reply. Check GEMINI_API_KEY.";
+      setSparcMessages([...newMessages, { role: "assistant", content: reply }]);
+    } catch {
+      setSparcMessages([
+        ...newMessages,
+        {
+          role: "assistant",
+          content:
+            "Could not reach SpArc. Check your connection and GEMINI_API_KEY.",
+        },
+      ]);
+    } finally {
+      setSparcLoading(false);
+    }
+  }, [campaignName, sparcBudgetStr, sparcPayoutTerms]);
+
+  const sendSpArcMessage = useCallback(async () => {
+    const text = sparcInput.trim();
+    if (!text || sparcLoading) return;
+    const userMsg = { role: "user", content: text };
+    const newMessages = [...sparcMessages, userMsg];
+    setSparcMessages(newMessages);
+    setSparcInput("");
+    setSparcLoading(true);
+    try {
+      const res = await fetch("/api/campaigns/demo/sparc", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          campaignName,
+          budget: sparcBudgetStr,
+          payoutTerms: sparcPayoutTerms,
+          messages: newMessages,
+        }),
+      });
+      const data = (await res.json()) as { reply?: string };
+      const reply =
+        typeof data.reply === "string" && data.reply
+          ? data.reply
+          : "SpArc could not generate a reply.";
+      setSparcMessages([...newMessages, { role: "assistant", content: reply }]);
+    } catch {
+      setSparcMessages([
+        ...newMessages,
+        {
+          role: "assistant",
+          content: "Could not reach SpArc. Try again.",
+        },
+      ]);
+    } finally {
+      setSparcLoading(false);
+    }
+  }, [
+    sparcInput,
+    sparcLoading,
+    sparcMessages,
+    campaignName,
+    sparcBudgetStr,
+    sparcPayoutTerms,
+  ]);
 
   // --- render helpers --------------------------------------------------
 
@@ -687,6 +938,15 @@ function DemoPageContent() {
             }
             .demoLightRoot .idleKickBtn:hover { background: #15803d; }
             .demoLightRoot .idleKickBtn:disabled { opacity: 0.55; cursor: not-allowed; }
+            @keyframes demoPoolBalanceFlash {
+              0% { background-color: transparent; }
+              40% { background-color: rgba(22, 163, 74, 0.28); }
+              100% { background-color: transparent; }
+            }
+            .demoLightRoot .pool-balance-line--flash {
+              animation: demoPoolBalanceFlash 1.2s ease-out 1;
+              border-radius: 8px;
+            }
           `,
           }}
         />
@@ -704,9 +964,333 @@ function DemoPageContent() {
           }}
         >
           <PersonalizedHeader campaignName={campaignName} />
+
+          {idlePreSim ? (
+            <section
+              style={{
+                width: "100%",
+                maxWidth: "100%",
+                boxSizing: "border-box",
+                background: C.cardBg,
+                border: `1px solid ${C.border}`,
+                borderRadius: 16,
+                padding: 24,
+                boxShadow: C.shadow,
+              }}
+            >
+              {briefApproved ? (
+                <>
+                  <div
+                    style={{
+                      display: "inline-block",
+                      marginBottom: 14,
+                      padding: "6px 12px",
+                      borderRadius: 999,
+                      background: "#dcfce7",
+                      color: "#166534",
+                      fontSize: 12,
+                      fontWeight: 600,
+                    }}
+                  >
+                    ✅ Brief Approved — Distributing to 12 creators
+                  </div>
+                  <div
+                    style={{
+                      display: "flex",
+                      alignItems: "flex-start",
+                      gap: 10,
+                    }}
+                  >
+                    <div
+                      style={{
+                        width: 28,
+                        height: 28,
+                        borderRadius: "50%",
+                        background: "#2563eb",
+                        color: "#fff",
+                        fontSize: 11,
+                        fontWeight: 700,
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        flexShrink: 0,
+                      }}
+                    >
+                      AS
+                    </div>
+                    <div
+                      style={{
+                        flex: 1,
+                        minWidth: 0,
+                        borderRadius: 12,
+                        padding: "12px 16px",
+                        fontSize: 14,
+                        lineHeight: 1.5,
+                        whiteSpace: "pre-wrap",
+                        background: "#f0f9ff",
+                        border: "1px solid #bae6fd",
+                        color: "#0c4a6e",
+                      }}
+                    >
+                      {lastSpArcAssistant}
+                    </div>
+                  </div>
+                </>
+              ) : (
+                <>
+                  <div
+                    style={{
+                      display: "flex",
+                      flexWrap: "wrap",
+                      alignItems: "flex-start",
+                      justifyContent: "space-between",
+                      gap: 16,
+                    }}
+                  >
+                    <div style={{ flex: "1 1 240px", minWidth: 0 }}>
+                      <div
+                        style={{
+                          fontSize: 17,
+                          fontWeight: 700,
+                          color: C.text,
+                          marginBottom: 4,
+                        }}
+                      >
+                        ⚡ SpArc — Campaign Brief Assistant
+                      </div>
+                      <p
+                        style={{
+                          margin: 0,
+                          fontSize: 12,
+                          color: C.textMuted,
+                        }}
+                      >
+                        Powered by Gemini
+                      </p>
+                    </div>
+                    {sparcMessages.length === 0 ? (
+                      <div style={{ flex: "0 0 auto" }}>
+                        <button
+                          type="button"
+                          onClick={() => void startSpArc()}
+                          disabled={sparcLoading}
+                          style={{
+                            display: "inline-flex",
+                            alignItems: "center",
+                            justifyContent: "center",
+                            minWidth: 200,
+                            minHeight: 44,
+                            padding: "0 22px",
+                            borderRadius: 999,
+                            border: "none",
+                            background: "#2563eb",
+                            color: "#fff",
+                            fontSize: 14,
+                            fontWeight: 600,
+                            fontFamily: "inherit",
+                            cursor: sparcLoading ? "not-allowed" : "pointer",
+                            opacity: sparcLoading ? 0.75 : 1,
+                          }}
+                        >
+                          {sparcLoading ? "Generating…" : "Generate Creator Brief"}
+                        </button>
+                      </div>
+                    ) : null}
+                  </div>
+                  {sparcMessages.length > 0 ? (
+                    <>
+                      <div
+                        style={{
+                          display: "flex",
+                          flexDirection: "column",
+                          gap: 10,
+                          marginTop: 20,
+                        }}
+                      >
+                        {lastSparcUserBubble ? (
+                          <div
+                            style={{
+                              display: "flex",
+                              justifyContent: "flex-end",
+                            }}
+                          >
+                            <div
+                              style={{
+                                maxWidth: "min(100%, 720px)",
+                                borderRadius: 12,
+                                padding: "8px 14px",
+                                fontSize: 13,
+                                lineHeight: 1.5,
+                                whiteSpace: "pre-wrap",
+                                background: "#f9fafb",
+                                border: "1px solid #e5e7eb",
+                                color: "#374151",
+                              }}
+                            >
+                              {lastSparcUserBubble.content}
+                            </div>
+                          </div>
+                        ) : null}
+                        {lastSparcAssistantBubble ? (
+                          <div
+                            style={{
+                              display: "flex",
+                              alignItems: "flex-start",
+                              gap: 10,
+                            }}
+                          >
+                            <div
+                              style={{
+                                width: 28,
+                                height: 28,
+                                borderRadius: "50%",
+                                background: "#2563eb",
+                                color: "#fff",
+                                fontSize: 11,
+                                fontWeight: 700,
+                                display: "flex",
+                                alignItems: "center",
+                                justifyContent: "center",
+                                flexShrink: 0,
+                              }}
+                            >
+                              AS
+                            </div>
+                            <div
+                              style={{
+                                flex: 1,
+                                minWidth: 0,
+                                maxWidth: "min(100%, 720px)",
+                                borderRadius: 12,
+                                padding: "12px 16px",
+                                fontSize: 14,
+                                lineHeight: 1.5,
+                                whiteSpace: "pre-wrap",
+                                background: "#f0f9ff",
+                                border: "1px solid #bae6fd",
+                                color: "#0c4a6e",
+                              }}
+                            >
+                              {lastSparcAssistantBubble.content}
+                            </div>
+                          </div>
+                        ) : null}
+                        {sparcLoading ? (
+                          <p
+                            style={{
+                              fontSize: 13,
+                              fontStyle: "italic",
+                              color: C.textMuted,
+                              margin: "0 0 0 38px",
+                            }}
+                          >
+                            SpArc is thinking…
+                          </p>
+                        ) : null}
+                      </div>
+                      <div
+                        style={{
+                          display: "flex",
+                          flexWrap: "wrap",
+                          gap: 8,
+                          marginTop: 14,
+                          alignItems: "center",
+                        }}
+                      >
+                        <input
+                          type="text"
+                          value={sparcInput}
+                          onChange={(e) => setSparcInput(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter" && !e.shiftKey) {
+                              e.preventDefault();
+                              void sendSpArcMessage();
+                            }
+                          }}
+                          placeholder="Refine the brief..."
+                          disabled={sparcLoading}
+                          style={{
+                            flex: "1 1 200px",
+                            minWidth: 0,
+                            height: 36,
+                            boxSizing: "border-box",
+                            padding: "0 12px",
+                            borderRadius: 8,
+                            border: `1px solid ${C.border}`,
+                            fontSize: 14,
+                            fontFamily: "inherit",
+                            outline: "none",
+                          }}
+                        />
+                        <button
+                          type="button"
+                          onClick={() => void sendSpArcMessage()}
+                          disabled={sparcLoading || !sparcInput.trim()}
+                          style={{
+                            height: 36,
+                            padding: "0 16px",
+                            borderRadius: 999,
+                            border: "none",
+                            background: C.blue,
+                            color: "#fff",
+                            fontSize: 13,
+                            fontWeight: 600,
+                            fontFamily: "inherit",
+                            cursor:
+                              sparcLoading || !sparcInput.trim()
+                                ? "not-allowed"
+                                : "pointer",
+                            opacity: sparcLoading || !sparcInput.trim() ? 0.55 : 1,
+                          }}
+                        >
+                          Send
+                        </button>
+                      </div>
+                      {hasAssistantReply && !briefApproved ? (
+                        <>
+                          <button
+                            type="button"
+                            onClick={() => setBriefApproved(true)}
+                            disabled={sparcLoading}
+                            style={{
+                              width: "100%",
+                              marginTop: 18,
+                              padding: "14px 20px",
+                              borderRadius: 12,
+                              border: "none",
+                              background: C.green,
+                              color: "#fff",
+                              fontSize: 15,
+                              fontWeight: 600,
+                              fontFamily: "inherit",
+                              cursor: sparcLoading ? "not-allowed" : "pointer",
+                              opacity: sparcLoading ? 0.6 : 1,
+                            }}
+                          >
+                            ✅ Approve & Distribute Brief
+                          </button>
+                          <p
+                            style={{
+                              margin: "10px 0 0",
+                              fontSize: 12,
+                              color: C.textMuted,
+                              textAlign: "center",
+                            }}
+                          >
+                            Locks this brief for distribution to 12 creators
+                          </p>
+                        </>
+                      ) : null}
+                    </>
+                  ) : null}
+                </>
+              )}
+            </section>
+          ) : null}
+
           <CausalStepStrip states={stepStates} />
 
-          {showIdleActivation ? (
+          {showPreSimCTAs ? (
             <section
               style={{
                 width: "100%",
@@ -732,6 +1316,7 @@ function DemoPageContent() {
                   href="https://faucet.circle.com"
                   target="_blank"
                   rel="noopener noreferrer"
+                  onClick={onFundCampaignClick}
                 >
                   <span aria-hidden>👛</span>
                   Fund Your Campaign
@@ -763,12 +1348,15 @@ function DemoPageContent() {
           <CampaignPoolCard
             pool={pool}
             campaignName={campaignName}
-            onRefresh={() => void refreshPool()}
+            onRefresh={() => void refreshPoolAndBalance()}
+            displayPoolDollars={displayPoolDollars}
+            isOnChainDisplay={showOnChainPoolDisplay}
+            poolBalanceFlash={poolBalanceFlash}
           />
           <LiveEventsCard
             rows={eventRows}
             onSeed={seed}
-            showHeaderSeed={!showIdleActivation}
+            showHeaderSeed={!idlePreSim}
             seedDisabled={
               phase === "seeding" ||
               phase === "resolving" ||
@@ -782,7 +1370,7 @@ function DemoPageContent() {
                   ? "Seed scenario"
                   : "Reseed scenario"
             }
-            emptyStateUseKickOff={showIdleActivation}
+            emptyStateUseKickOff={showPreSimCTAs}
           />
 
           <section style={{ ...cardShell }}>
@@ -1100,11 +1688,31 @@ function CampaignPoolCard({
   pool,
   campaignName,
   onRefresh,
+  displayPoolDollars,
+  isOnChainDisplay,
+  poolBalanceFlash,
 }: {
   pool: Campaign | null;
   campaignName: string;
   onRefresh: () => void;
+  displayPoolDollars: number | null;
+  isOnChainDisplay: boolean;
+  poolBalanceFlash: boolean;
 }) {
+  const balanceLine =
+    displayPoolDollars !== null && Number.isFinite(displayPoolDollars)
+      ? displayPoolDollars.toFixed(2)
+      : "—";
+  const positive =
+    displayPoolDollars !== null &&
+    Number.isFinite(displayPoolDollars) &&
+    displayPoolDollars > 0;
+  const balanceColor =
+    displayPoolDollars === null
+      ? C.textMuted
+      : positive
+        ? C.green
+        : "#dc2626";
   return (
     <section style={{ ...cardShell }}>
       <h2
@@ -1167,19 +1775,42 @@ function CampaignPoolCard({
             }}
           >
             Pool balance
+            {isOnChainDisplay ? (
+              <span
+                style={{
+                  display: "block",
+                  fontSize: 10,
+                  fontWeight: 500,
+                  textTransform: "none",
+                  letterSpacing: 0,
+                  color: C.textMuted,
+                  marginTop: 2,
+                }}
+              >
+                (on-chain wallet)
+              </span>
+            ) : null}
           </div>
           <div
+            className={
+              poolBalanceFlash ? "pool-balance-line--flash" : undefined
+            }
             style={{
+              display: "inline-block",
               fontSize: 56,
               fontWeight: 700,
               lineHeight: 1,
-              color: pool && pool.poolBalance > 0 ? C.green : "#dc2626",
+              color: balanceColor,
               fontVariantNumeric: "tabular-nums",
               letterSpacing: "-0.02em",
             }}
-            title={pool ? `${pool.poolBalance} USDC` : ""}
+            title={
+              displayPoolDollars !== null
+                ? `${displayPoolDollars} USDC`
+                : undefined
+            }
           >
-            ${pool ? pool.poolBalance.toFixed(2) : "—"}
+            ${balanceLine}
             <span
               style={{
                 fontSize: 16,
