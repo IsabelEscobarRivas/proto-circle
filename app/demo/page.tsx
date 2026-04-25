@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
+import { useSearchParams } from "next/navigation";
 
 // Wallet constants: testnet addresses, not secrets.
 // Platform wallet pays out from the server side (lib/payout.ts). It must not
@@ -144,6 +145,8 @@ async function getJson<T>(path: string): Promise<T> {
 }
 
 export default function DemoPage() {
+  const searchParams = useSearchParams();
+  const campaignName = searchParams.get("campaign") ?? "Demo Campaign";
   const [phase, setPhase] = useState<Phase>("idle");
   const [error, setError] = useState<string | null>(null);
   const [trace, setTrace] = useState<string[]>([]);
@@ -358,7 +361,7 @@ export default function DemoPage() {
     }
   }, [log, preflightOk, refreshPool]);
 
-  const resolve = useCallback(async () => {
+  const resolveAndPay = useCallback(async () => {
     if (!subjectId) return;
     setPhase("resolving");
     setError(null);
@@ -376,7 +379,7 @@ export default function DemoPage() {
       log(`  conversion event ${conv.event.id}`);
 
       log("Resolving attribution (recency-weighted)…");
-      const res = await postJson<{
+      const resolved = await postJson<{
         decision: Decision;
         rationale: Rationale;
       }>("/api/attribution/resolve", {
@@ -386,30 +389,18 @@ export default function DemoPage() {
         amount_usd: AMOUNT_USD,
         lookback_days: LOOKBACK_DAYS,
       });
-      setDecision(res.decision);
-      setRationale(res.rationale);
-      log(`  decision ${res.decision.id}`);
-      setPhase("resolved");
-    } catch (e) {
-      const m = e instanceof Error ? e.message : String(e);
-      setError(m);
-      log(`ERROR ${m}`);
-      setPhase("error");
-    }
-  }, [subjectId, log]);
+      setDecision(resolved.decision);
+      setRationale(resolved.rationale);
+      log(`  decision ${resolved.decision.id}`);
 
-  const payAndPoll = useCallback(async () => {
-    if (!decision) return;
-    setPhase("paying");
-    setError(null);
-    try {
+      setPhase("paying");
       log("Triggering payouts…");
-      const res = await postJson<{ payouts: Payout[] }>("/api/payouts", {
-        decision_id: decision.id,
+      const paid = await postJson<{ payouts: Payout[] }>("/api/payouts", {
+        decision_id: resolved.decision.id,
       });
-      setPayouts(res.payouts);
-      log(`  ${res.payouts.length} payout(s) initiated`);
-      for (const p of res.payouts) {
+      setPayouts(paid.payouts);
+      log(`  ${paid.payouts.length} payout(s) initiated`);
+      for (const p of paid.payouts) {
         log(`    circle_tx=${p.circle_tx_id ?? "pending"}  state=${p.status}`);
       }
       const afterPay = await refreshPool();
@@ -420,12 +411,12 @@ export default function DemoPage() {
       setPhase("polling");
       const terminal = (p: Payout) =>
         p.status === "complete" || p.status === "failed";
-      let lastStates = res.payouts.map((p) => p.status).join(",");
+      let lastStates = paid.payouts.map((p) => p.status).join(",");
 
       for (let i = 0; i < 40; i++) {
         await new Promise((r) => setTimeout(r, 2500));
         const poll = await getJson<{ payouts: Payout[] }>(
-          `/api/dashboard/payouts/${decision.id}`,
+          `/api/dashboard/payouts/${resolved.decision.id}`,
         );
         setPayouts(poll.payouts);
         const states = poll.payouts.map((p) => p.status).join(",");
@@ -435,11 +426,13 @@ export default function DemoPage() {
         }
         if (poll.payouts.every(terminal)) {
           log("All payouts terminal.");
+          await refreshPool();
           setPhase("done");
           return;
         }
       }
       log("Polling stopped after 100 s (still non-terminal).");
+      await refreshPool();
       setPhase("done");
     } catch (e) {
       const m = e instanceof Error ? e.message : String(e);
@@ -447,11 +440,11 @@ export default function DemoPage() {
       log(`ERROR ${m}`);
       setPhase("error");
     }
-  }, [decision, log, refreshPool]);
+  }, [subjectId, log, refreshPool]);
 
-  const canResolve = phase === "ready";
-  const canPay =
-    phase === "resolved" && decision !== null && rationale !== null;
+  const canResolveAndPay = phase === "ready";
+  const isWorking =
+    phase === "resolving" || phase === "paying" || phase === "polling";
 
   const byId = useMemo(() => {
     const m = new Map<string, Influencer>();
@@ -543,7 +536,7 @@ export default function DemoPage() {
         style={{ borderColor: "var(--accent, #3ecf8e)" }}
       >
         <h2>
-          Campaign pool <small>{pool ? pool.id : "loading…"}</small>
+          Campaign pool <small>{campaignName}</small>
         </h2>
         <div
           style={{
@@ -727,20 +720,32 @@ export default function DemoPage() {
         ) : null}
       </section>
 
-      {/* Step 2: resolve */}
+      {/* Step 2: resolve attribution + trigger payouts (single action) */}
       <section className="card">
         <h2>
-          Step 2 — Resolve attribution <small>{phaseTag(phase, "resolving", "resolved")}</small>
+          Step 2 — Log conversion + instant payout{" "}
+          <small>
+            {isWorking ? (
+              <span className="tag sending">in progress</span>
+            ) : phase === "done" ? (
+              <span className="tag complete">done</span>
+            ) : null}
+          </small>
         </h2>
         <p className="dim">
-          Records a conversion event for the subject and calls the
-          recency-weighted attribution engine. Per-click weight is
-          <code> 1 / (age_hours + 1)</code>; per-creator shares are the
-          normalized sum, multiplied by the conversion amount.
+          One click runs the full tail of the pipeline: records the
+          conversion event, resolves recency-weighted attribution
+          (<code>1 / (age_hours + 1)</code> per click, normalized per
+          creator), and immediately fires one Circle USDC transfer per
+          creator share via <code>POST /api/payouts</code>.
         </p>
         <div style={{ marginTop: 12 }}>
-          <button className="btn" onClick={resolve} disabled={!canResolve}>
-            Resolve attribution
+          <button
+            className="btn"
+            onClick={resolveAndPay}
+            disabled={!canResolveAndPay || isWorking}
+          >
+            {isWorking ? "Resolving and paying…" : "Log conversion + pay"}
           </button>
         </div>
 
@@ -792,24 +797,6 @@ export default function DemoPage() {
             </div>
           </div>
         ) : null}
-      </section>
-
-      {/* Step 3: payout */}
-      <section className="card">
-        <h2>
-          Step 3 — Trigger instant USDC payouts <small>{phaseTag(phase, "paying", "done")}</small>
-        </h2>
-        <p className="dim">
-          One Circle developer-controlled-wallet transfer per creator share.
-          The same backend path the dashboard uses:{" "}
-          <code>POST /api/payouts</code>. Each row updates as the transaction
-          moves through <code>sending</code> → <code>complete</code>.
-        </p>
-        <div style={{ marginTop: 12 }}>
-          <button className="btn" onClick={payAndPoll} disabled={!canPay}>
-            Trigger payouts
-          </button>
-        </div>
 
         {payouts.length > 0 ? (
           <table style={{ marginTop: 16 }}>
@@ -840,7 +827,15 @@ export default function DemoPage() {
                     )}
                   </td>
                   <td>
-                    {p.explorer_url ? (
+                    {p.tx_hash ? (
+                      <a
+                        href={`https://testnet.arcscan.app/tx/${p.tx_hash}`}
+                        target="_blank"
+                        rel="noreferrer"
+                      >
+                        Arcscan ↗
+                      </a>
+                    ) : p.explorer_url ? (
                       <a href={p.explorer_url} target="_blank" rel="noreferrer">
                         Arcscan ↗
                       </a>

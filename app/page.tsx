@@ -1,413 +1,472 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 
-type Influencer = {
-  id: string;
-  display_name: string;
-  wallet_address: string;
-  status: string;
+// ---------------------------------------------------------------------------
+// UI-only landing page. All styles are inline so the global dark theme in
+// app/globals.css is not affected and we don't have to touch any other file.
+// Backend, API routes, and the demo page logic are intentionally untouched.
+// ---------------------------------------------------------------------------
+
+const COLOR = {
+  bg: "#f8f8f8",
+  surface: "#ffffff",
+  textPrimary: "#1a1a1a",
+  textMuted: "#6b7280",
+  accentBlue: "#2563eb",
+  accentGreen: "#16a34a",
+  accentAmber: "#d97706",
+  border: "#e5e7eb",
 };
 
-type CampaignLinkRow = {
-  id: string;
-  influencer_id: string;
-  influencer_display_name: string;
-  merchant_domain: string;
-  target_url: string;
-  tracking_url: string;
-  created_at: number;
+type Campaign = {
+  name: string;
+  budget: string;
+  creators: number;
+  payout: string;
+  status: "ACTIVE" | "FILLING" | "DEMO";
 };
 
-type Subject = {
-  subject_id: string;
-  event_count: number;
-  last_event_at: number;
-};
+const campaigns: Campaign[] = [
+  {
+    name: "StyLens Spring Drop",
+    budget: "$500 USDC",
+    creators: 12,
+    payout: "$0.01/click · 20% conversion",
+    status: "ACTIVE",
+  },
+  {
+    name: "Arc Ecosystem Launch",
+    budget: "$1,200 USDC",
+    creators: 28,
+    payout: "$0.02/click · 15% conversion",
+    status: "ACTIVE",
+  },
+  {
+    name: "Circle Payments Campaign",
+    budget: "$300 USDC",
+    creators: 8,
+    payout: "$0.01/click · 10% conversion",
+    status: "FILLING",
+  },
+  {
+    name: "Web3 Creator Fund",
+    budget: "$2,000 USDC",
+    creators: 45,
+    payout: "$0.05/click · 25% conversion",
+    status: "ACTIVE",
+  },
+  {
+    name: "Testnet Beta Program",
+    budget: "$100 USDC",
+    creators: 5,
+    payout: "$0.01/click · flat $0.20",
+    status: "DEMO",
+  },
+  {
+    name: "Creator Launch Accelerator",
+    budget: "$750 USDC",
+    creators: 18,
+    payout: "$0.03/click · 15% conversion",
+    status: "ACTIVE",
+  },
+];
 
-type Decision = {
-  id: string;
-  subject_id: string;
-  method: string;
-  total_amount_usd: number;
-  created_at: number;
-  share_count: number;
-  payout_count: number;
-  payout_complete_count: number;
-};
-
-type Overview = {
-  influencers: Influencer[];
-  links: CampaignLinkRow[];
-  subjects: Subject[];
-  decisions: Decision[];
-};
-
-function formatTs(ms: number): string {
-  const d = new Date(ms);
-  return d.toLocaleString();
+function statusColor(status: Campaign["status"]) {
+  switch (status) {
+    case "ACTIVE":
+      return { bg: "#dcfce7", fg: COLOR.accentGreen };
+    case "FILLING":
+      return { bg: "#fef3c7", fg: COLOR.accentAmber };
+    case "DEMO":
+      return { bg: "#dbeafe", fg: COLOR.accentBlue };
+  }
 }
 
 export default function Home() {
-  const [data, setData] = useState<Overview | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [err, setErr] = useState<string | null>(null);
-
-  const refresh = useCallback(async () => {
-    try {
-      const res = await fetch("/api/dashboard/overview", { cache: "no-store" });
-      if (!res.ok) throw new Error(`Fetch failed: ${res.status}`);
-      setData(await res.json());
-      setErr(null);
-    } catch (e) {
-      setErr((e as Error).message);
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    refresh();
-  }, [refresh]);
-
-  if (loading) return <p className="dim">Loading…</p>;
-  if (err)
-    return (
-      <p style={{ color: "var(--err)" }}>Failed to load overview: {err}</p>
-    );
-  if (!data) return null;
-
-  return (
-    <div className="stack" style={{ gap: 18 }}>
-      <div className="grid cols-2">
-        <CreateInfluencer onCreated={refresh} />
-        <CreateLink influencers={data.influencers} onCreated={refresh} />
-      </div>
-
-      <div className="grid cols-2">
-        <div className="card">
-          <h2>
-            Influencers <small>{data.influencers.length}</small>
-          </h2>
-          {data.influencers.length === 0 ? (
-            <p className="empty">No influencers yet. Create one above.</p>
-          ) : (
-            <table>
-              <thead>
-                <tr>
-                  <th>Name</th>
-                  <th>Wallet</th>
-                  <th>Status</th>
-                </tr>
-              </thead>
-              <tbody>
-                {data.influencers.map((i) => (
-                  <tr key={i.id}>
-                    <td>{i.display_name}</td>
-                    <td>
-                      <span className="chip" title={i.wallet_address}>
-                        {i.wallet_address.slice(0, 6)}…{i.wallet_address.slice(-4)}
-                      </span>
-                    </td>
-                    <td>
-                      <span className="tag">{i.status}</span>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          )}
-        </div>
-
-        <div className="card">
-          <h2>
-            Campaign Links <small>{data.links.length}</small>
-          </h2>
-          {data.links.length === 0 ? (
-            <p className="empty">No campaign links yet.</p>
-          ) : (
-            <table>
-              <thead>
-                <tr>
-                  <th>Influencer</th>
-                  <th>Merchant</th>
-                  <th>Tracking URL</th>
-                </tr>
-              </thead>
-              <tbody>
-                {data.links.map((l) => (
-                  <tr key={l.id}>
-                    <td>{l.influencer_display_name}</td>
-                    <td>{l.merchant_domain}</td>
-                    <td>
-                      <a
-                        href={l.tracking_url}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="chip"
-                      >
-                        /r/{l.id}
-                      </a>
-                      <button
-                        type="button"
-                        className="btn secondary"
-                        style={{ marginLeft: 6, padding: "2px 6px", fontSize: 11 }}
-                        onClick={() =>
-                          navigator.clipboard.writeText(l.tracking_url)
-                        }
-                      >
-                        copy
-                      </button>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          )}
-        </div>
-      </div>
-
-      <div className="grid cols-2">
-        <div className="card">
-          <h2>
-            Activity (anonymous users) <small>{data.subjects.length}</small>
-          </h2>
-          {data.subjects.length === 0 ? (
-            <p className="empty">
-              No click events yet. Open a tracking link in a new tab or
-              incognito window to generate one.
-            </p>
-          ) : (
-            <table>
-              <thead>
-                <tr>
-                  <th>Subject</th>
-                  <th>Events</th>
-                  <th>Last seen</th>
-                  <th />
-                </tr>
-              </thead>
-              <tbody>
-                {data.subjects.map((s) => (
-                  <tr key={s.subject_id}>
-                    <td>
-                      <span className="chip">
-                        {s.subject_id.slice(0, 16)}…
-                      </span>
-                    </td>
-                    <td>{s.event_count}</td>
-                    <td className="dim">{formatTs(s.last_event_at)}</td>
-                    <td>
-                      <Link
-                        href={`/dashboard/timeline/${encodeURIComponent(s.subject_id)}`}
-                      >
-                        Timeline →
-                      </Link>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          )}
-        </div>
-
-        <div className="card">
-          <h2>
-            Attribution decisions <small>{data.decisions.length}</small>
-          </h2>
-          {data.decisions.length === 0 ? (
-            <p className="empty">
-              No attribution decisions yet. Run one from a subject timeline.
-            </p>
-          ) : (
-            <table>
-              <thead>
-                <tr>
-                  <th>Decision</th>
-                  <th>Method</th>
-                  <th>Amount</th>
-                  <th>Payouts</th>
-                  <th />
-                </tr>
-              </thead>
-              <tbody>
-                {data.decisions.map((d) => (
-                  <tr key={d.id}>
-                    <td>
-                      <span className="chip">{d.id}</span>
-                    </td>
-                    <td>{d.method}</td>
-                    <td>${d.total_amount_usd.toFixed(2)}</td>
-                    <td>
-                      {d.payout_complete_count}/{d.payout_count || d.share_count}{" "}
-                      complete
-                    </td>
-                    <td>
-                      <Link
-                        href={`/dashboard/payouts/${encodeURIComponent(d.id)}`}
-                      >
-                        View →
-                      </Link>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          )}
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function CreateInfluencer({ onCreated }: { onCreated: () => void }) {
+  const router = useRouter();
   const [name, setName] = useState("");
-  const [wallet, setWallet] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [err, setErr] = useState<string | null>(null);
+  const canSubmit = name.trim().length > 0;
+  const params = canSubmit ? `?campaign=${encodeURIComponent(name.trim())}` : "";
 
-  async function submit(e: React.FormEvent) {
-    e.preventDefault();
-    setBusy(true);
-    setErr(null);
-    try {
-      const res = await fetch("/api/influencers", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          display_name: name,
-          wallet_address: wallet,
-        }),
-      });
-      const body = await res.json();
-      if (!res.ok) throw new Error(body.message || "Failed");
-      setName("");
-      setWallet("");
-      onCreated();
-    } catch (e) {
-      setErr((e as Error).message);
-    } finally {
-      setBusy(false);
-    }
-  }
+  const go = (mode: "start" | "join") => {
+    if (!canSubmit) return;
+    router.push(`/demo${params}&mode=${mode}`);
+  };
 
   return (
-    <form className="card form-grid" onSubmit={submit}>
-      <h2>New influencer</h2>
-      <div>
-        <label htmlFor="inf-name">Display name</label>
-        <input
-          id="inf-name"
-          value={name}
-          onChange={(e) => setName(e.target.value)}
-          placeholder="Alice"
-          required
-        />
+    <>
+      {/* Inter font. Rendered in the page body; browsers honor it fine. */}
+      <link
+        rel="preconnect"
+        href="https://fonts.googleapis.com"
+      />
+      <link
+        rel="preconnect"
+        href="https://fonts.gstatic.com"
+        crossOrigin=""
+      />
+      <link
+        rel="stylesheet"
+        href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap"
+      />
+
+      <div
+        style={{
+          // Break out of the global .layout container (max-width 1160, p:24)
+          // so the light theme covers the full viewport visually.
+          margin: "-24px calc(50% - 50vw)",
+          background: COLOR.bg,
+          color: COLOR.textPrimary,
+          fontFamily:
+            "Inter, ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif",
+          minHeight: "100vh",
+        }}
+      >
+        {/* Nav bar */}
+        <header
+          style={{
+            background: COLOR.surface,
+            borderBottom: `1px solid ${COLOR.border}`,
+            padding: "16px 32px",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            flexWrap: "wrap",
+            gap: 12,
+          }}
+        >
+          <div>
+            <Link
+              href="/"
+              style={{
+                color: COLOR.textPrimary,
+                textDecoration: "none",
+                fontWeight: 700,
+                fontSize: 16,
+              }}
+            >
+              Attribution &amp; Micropayments
+            </Link>{" "}
+            <span
+              style={{
+                color: COLOR.textMuted,
+                fontSize: 12,
+                marginLeft: 6,
+              }}
+            >
+              instant payouts · arc testnet · hackathon prototype
+            </span>
+          </div>
+          <nav style={{ display: "flex", gap: 20, fontSize: 14 }}>
+            <Link href="/" style={navLinkStyle}>
+              Overview
+            </Link>
+            <Link href="/demo" style={navLinkStyle}>
+              Live demo
+            </Link>
+            <a
+              href="https://testnet.arcscan.app"
+              target="_blank"
+              rel="noreferrer"
+              style={navLinkStyle}
+            >
+              Arcscan
+            </a>
+            <a
+              href="https://faucet.circle.com"
+              target="_blank"
+              rel="noreferrer"
+              style={navLinkStyle}
+            >
+              Faucet
+            </a>
+          </nav>
+        </header>
+
+        {/* Hero */}
+        <section
+          style={{
+            padding: "72px 32px 48px",
+            display: "flex",
+            flexDirection: "column",
+            alignItems: "center",
+            textAlign: "center",
+          }}
+        >
+          <h1
+            style={{
+              fontSize: 52,
+              lineHeight: 1.08,
+              fontWeight: 700,
+              letterSpacing: "-0.02em",
+              margin: 0,
+              maxWidth: 880,
+              color: COLOR.textPrimary,
+            }}
+          >
+            Run campaigns. Pay on real engagement.
+          </h1>
+          <p
+            style={{
+              marginTop: 18,
+              fontSize: 18,
+              lineHeight: 1.5,
+              color: COLOR.textMuted,
+              maxWidth: 640,
+            }}
+          >
+            Fund a creator campaign, track clicks and conversions,
+            <br />
+            and pay out USDC automatically — verified on-chain.
+          </p>
+
+          <div
+            style={{
+              display: "flex",
+              flexWrap: "wrap",
+              justifyContent: "center",
+              gap: 24,
+              marginTop: 28,
+              fontSize: 14,
+              color: COLOR.textMuted,
+            }}
+          >
+            <span>👛 Campaign wallet</span>
+            <span>👥 Approved creators</span>
+            <span>⚡ Instant micropayments</span>
+            <span>🔗 On-chain proof</span>
+          </div>
+
+          {/* Entry card */}
+          <div
+            style={{
+              marginTop: 40,
+              background: COLOR.surface,
+              border: `1px solid ${COLOR.border}`,
+              borderRadius: 20,
+              boxShadow: "0 2px 16px rgba(0,0,0,0.07)",
+              padding: 24,
+              width: "100%",
+              maxWidth: 560,
+              display: "flex",
+              flexDirection: "column",
+              gap: 14,
+            }}
+          >
+            <input
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              placeholder="Campaign name or code"
+              style={{
+                width: "100%",
+                padding: "14px 20px",
+                borderRadius: 999,
+                border: `1px solid ${COLOR.border}`,
+                background: COLOR.surface,
+                color: COLOR.textPrimary,
+                fontSize: 15,
+                fontFamily: "inherit",
+                outline: "none",
+              }}
+            />
+            <div style={{ display: "flex", gap: 10 }}>
+              <button
+                onClick={() => go("start")}
+                disabled={!canSubmit}
+                style={{
+                  ...pillButton,
+                  background: COLOR.accentGreen,
+                  opacity: canSubmit ? 1 : 0.5,
+                  cursor: canSubmit ? "pointer" : "not-allowed",
+                }}
+              >
+                Start a Campaign
+              </button>
+              <button
+                onClick={() => go("join")}
+                disabled={!canSubmit}
+                style={{
+                  ...pillButton,
+                  background: COLOR.accentBlue,
+                  opacity: canSubmit ? 1 : 0.5,
+                  cursor: canSubmit ? "pointer" : "not-allowed",
+                }}
+              >
+                Join a Campaign
+              </button>
+            </div>
+          </div>
+        </section>
+
+        {/* Live Campaigns */}
+        <section
+          style={{
+            padding: "16px 32px 56px",
+            maxWidth: 1160,
+            margin: "0 auto",
+          }}
+        >
+          <div
+            style={{
+              fontSize: 12,
+              fontWeight: 700,
+              letterSpacing: "0.08em",
+              textTransform: "uppercase",
+              color: COLOR.textMuted,
+              marginBottom: 16,
+            }}
+          >
+            Live Campaigns
+          </div>
+
+          <div className="campaign-grid">
+            {campaigns.map((c) => (
+              <CampaignCard key={c.name} campaign={c} />
+            ))}
+          </div>
+        </section>
+
+        {/* Footer */}
+        <footer
+          style={{
+            padding: "24px 16px 40px",
+            textAlign: "center",
+            color: COLOR.textMuted,
+            fontSize: 13,
+          }}
+        >
+          Proto-Circle · Arc Testnet · Powered by Circle USDC
+        </footer>
+
+        {/* Scoped responsive grid + hover effects without touching globals.css */}
+        <style>{`
+          .campaign-grid {
+            display: grid;
+            grid-template-columns: repeat(3, minmax(0, 1fr));
+            gap: 16px;
+          }
+          @media (max-width: 960px) {
+            .campaign-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+          }
+          @media (max-width: 600px) {
+            .campaign-grid { grid-template-columns: 1fr; }
+          }
+          .campaign-card {
+            background: ${COLOR.surface};
+            border: 1px solid ${COLOR.border};
+            border-radius: 16px;
+            box-shadow: 0 2px 16px rgba(0,0,0,0.07);
+            padding: 20px;
+            text-decoration: none;
+            color: ${COLOR.textPrimary};
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+            transition: transform 160ms ease, box-shadow 160ms ease;
+          }
+          .campaign-card:hover {
+            transform: scale(1.02);
+            box-shadow: 0 8px 28px rgba(0,0,0,0.12);
+            text-decoration: none;
+          }
+        `}</style>
       </div>
-      <div>
-        <label htmlFor="inf-wallet">Arc wallet address (0x…)</label>
-        <input
-          id="inf-wallet"
-          value={wallet}
-          onChange={(e) => setWallet(e.target.value)}
-          placeholder="0xabc…"
-          required
-        />
-      </div>
-      {err && <p style={{ color: "var(--err)", fontSize: 12 }}>{err}</p>}
-      <div>
-        <button className="btn" type="submit" disabled={busy}>
-          {busy ? "Creating…" : "Create influencer"}
-        </button>
-      </div>
-    </form>
+    </>
   );
 }
 
-function CreateLink({
-  influencers,
-  onCreated,
-}: {
-  influencers: Influencer[];
-  onCreated: () => void;
-}) {
-  const [influencerId, setInfluencerId] = useState("");
-  const [merchant, setMerchant] = useState("example-shop.com");
-  const [target, setTarget] = useState("https://example-shop.com/products/tote");
-  const [busy, setBusy] = useState(false);
-  const [err, setErr] = useState<string | null>(null);
+const navLinkStyle: React.CSSProperties = {
+  color: COLOR.textMuted,
+  textDecoration: "none",
+  fontWeight: 500,
+};
 
-  async function submit(e: React.FormEvent) {
-    e.preventDefault();
-    if (!influencerId) return setErr("Pick an influencer.");
-    setBusy(true);
-    setErr(null);
-    try {
-      const res = await fetch("/api/campaign-links", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          influencer_id: influencerId,
-          merchant_domain: merchant,
-          target_url: target,
-        }),
-      });
-      const body = await res.json();
-      if (!res.ok) throw new Error(body.message || "Failed");
-      onCreated();
-    } catch (e) {
-      setErr((e as Error).message);
-    } finally {
-      setBusy(false);
-    }
-  }
+const pillButton: React.CSSProperties = {
+  flex: 1,
+  padding: "12px 16px",
+  borderRadius: 999,
+  border: "none",
+  color: "white",
+  fontSize: 14,
+  fontWeight: 600,
+  fontFamily: "inherit",
+  letterSpacing: 0.1,
+};
 
+function CampaignCard({ campaign }: { campaign: Campaign }) {
+  const c = statusColor(campaign.status);
   return (
-    <form className="card form-grid" onSubmit={submit}>
-      <h2>New campaign link</h2>
-      <div>
-        <label htmlFor="link-inf">Influencer</label>
-        <select
-          id="link-inf"
-          value={influencerId}
-          onChange={(e) => setInfluencerId(e.target.value)}
-          required
+    <Link
+      className="campaign-card"
+      href={`/demo?campaign=${encodeURIComponent(campaign.name)}`}
+    >
+      <div
+        style={{
+          display: "flex",
+          alignItems: "flex-start",
+          justifyContent: "space-between",
+          gap: 8,
+        }}
+      >
+        <div
+          style={{
+            fontSize: 16,
+            fontWeight: 700,
+            color: COLOR.textPrimary,
+            lineHeight: 1.3,
+          }}
         >
-          <option value="">— select —</option>
-          {influencers.map((i) => (
-            <option key={i.id} value={i.id}>
-              {i.display_name}
-            </option>
-          ))}
-        </select>
-      </div>
-      <div className="row">
-        <div>
-          <label htmlFor="link-merchant">Merchant domain</label>
-          <input
-            id="link-merchant"
-            value={merchant}
-            onChange={(e) => setMerchant(e.target.value)}
-            required
-          />
+          {campaign.name}
         </div>
-        <div>
-          <label htmlFor="link-target">Target URL</label>
-          <input
-            id="link-target"
-            value={target}
-            onChange={(e) => setTarget(e.target.value)}
-            required
-          />
-        </div>
+        <span
+          style={{
+            background: c.bg,
+            color: c.fg,
+            padding: "3px 10px",
+            borderRadius: 999,
+            fontSize: 10,
+            fontWeight: 700,
+            letterSpacing: "0.08em",
+            textTransform: "uppercase",
+            whiteSpace: "nowrap",
+          }}
+        >
+          {campaign.status}
+        </span>
       </div>
-      {err && <p style={{ color: "var(--err)", fontSize: 12 }}>{err}</p>}
-      <div>
-        <button className="btn" type="submit" disabled={busy}>
-          {busy ? "Creating…" : "Create link"}
-        </button>
+
+      <div
+        style={{
+          color: COLOR.accentGreen,
+          fontSize: 18,
+          fontWeight: 700,
+        }}
+      >
+        {campaign.budget}
       </div>
-    </form>
+
+      <div style={{ color: COLOR.textMuted, fontSize: 13 }}>
+        👥 {campaign.creators} creators
+      </div>
+
+      <div style={{ color: COLOR.textMuted, fontSize: 12 }}>
+        {campaign.payout}
+      </div>
+
+      <div
+        style={{
+          marginTop: "auto",
+          paddingTop: 8,
+          color: COLOR.accentBlue,
+          fontSize: 13,
+          fontWeight: 600,
+        }}
+      >
+        View campaign →
+      </div>
+    </Link>
   );
 }
