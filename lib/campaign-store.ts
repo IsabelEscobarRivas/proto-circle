@@ -17,10 +17,21 @@ type CampaignState = {
 const GLOBAL_KEY = "__protoCircleCampaign__";
 
 function init(): CampaignState {
+  // Stable pool identities for the two demo creator wallets. Lets click
+  // micropayments succeed after a cold start without /approve (restart-safe).
   return {
     id: "demo-campaign-001",
     poolBalance: 10.0,
-    approvedCreators: [],
+    approvedCreators: [
+      {
+        id: "creator-a",
+        walletAddress: "0x74cd72c679248d815249d5269ad8bf07dc265ca6",
+      },
+      {
+        id: "creator-b",
+        walletAddress: "0x704d61937c67e39a0d53f4a014066f373a1b0241",
+      },
+    ],
     clickPayoutAmount: 0.01,
     conversionPayoutAmount: 0.2,
   };
